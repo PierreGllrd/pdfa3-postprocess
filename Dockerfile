@@ -10,8 +10,9 @@ RUN apt-get update && \
 # Vérifier que Ghostscript est installé
 RUN gs --version
 
-# Copier le serveur
+# Copier le serveur et le fichier de configuration PDFA
 COPY fix-pdfa3-server.py /app/fix-pdfa3-server.py
+COPY PDFA_def.ps /app/PDFA_def.ps
 
 # Exposer le port
 EXPOSE 8080

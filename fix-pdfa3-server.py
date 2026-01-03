@@ -47,25 +47,40 @@ class PDFA3Handler(BaseHTTPRequestHandler):
             # Ces options forcent Ghostscript à générer l'OutputIntent RGB et l'ID keyword
             print(f"Processing PDF: {len(pdf_data)} bytes", flush=True)
             
-            result = subprocess.run([
+            # Chemin vers le fichier de configuration PDFA (si disponible)
+            pdfa_def_path = '/app/PDFA_def.ps'
+            if not os.path.exists(pdfa_def_path):
+                pdfa_def_path = None
+            
+            # Construire la commande Ghostscript
+            # Utiliser UseDeviceIndependentColor pour forcer la création d'un OutputIntent
+            gs_command = [
                 'gs',
-                '-dPDFA=3',                      # PDF/A-3
-                '-dBATCH',                       # Pas d'interaction
-                '-dNOPAUSE',                     # Pas de pause
-                '-dNOOUTERSAVE',                 # Pas de sauvegarde externe
-                '-sColorConversionStrategy=RGB', # Conversion en RGB
+                '-dPDFA=3',                                    # PDF/A-3
+                '-dBATCH',                                     # Pas d'interaction
+                '-dNOPAUSE',                                   # Pas de pause
+                '-dNOOUTERSAVE',                               # Pas de sauvegarde externe
+                '-sColorConversionStrategy=UseDeviceIndependentColor', # Utiliser couleurs indépendantes (FORCE OutputIntent)
                 '-sOutputFile=' + output_path,
-                '-sDEVICE=pdfwrite',             # Device de sortie PDF
-                '-dPDFACompatibilityPolicy=1',   # Politique de compatibilité PDF/A stricte
-                '-dUseCIEColor=true',            # Utiliser les couleurs CIE (OBLIGATOIRE pour OutputIntent)
-                '-dCompatibilityLevel=1.4',      # Compatibilité PDF 1.4 (minimum pour PDF/A-3)
-                '-sProcessColorModel=DeviceRGB', # Modèle de couleur RGB
-                '-dPDFSETTINGS=/prepress',       # Paramètres prépresse (FORCE l'ID keyword dans le trailer)
-                '-dEmbedAllFonts=true',          # Embarquer toutes les polices
-                '-dSubsetFonts=true',            # Sous-ensembler les polices (optimisation)
-                '-dAutoRotatePages=/None',       # Pas de rotation automatique
-                input_path
-            ], capture_output=True, text=True, timeout=120)
+                '-sDEVICE=pdfwrite',                           # Device de sortie PDF
+                '-dPDFACompatibilityPolicy=1',                 # Politique de compatibilité PDF/A stricte
+                '-dUseCIEColor=true',                          # Utiliser les couleurs CIE (OBLIGATOIRE pour OutputIntent)
+                '-dCompatibilityLevel=1.4',                    # Compatibilité PDF 1.4 (minimum pour PDF/A-3)
+                '-sProcessColorModel=DeviceRGB',               # Modèle de couleur RGB
+                '-dPDFSETTINGS=/prepress',                     # Paramètres prépresse (FORCE l'ID keyword dans le trailer)
+                '-dEmbedAllFonts=true',                        # Embarquer toutes les polices
+                '-dSubsetFonts=true',                          # Sous-ensembler les polices (optimisation)
+                '-dAutoRotatePages=/None',                     # Pas de rotation automatique
+            ]
+            
+            # Ajouter le fichier de configuration PDFA si disponible
+            if pdfa_def_path:
+                gs_command.append(pdfa_def_path)
+            
+            # Ajouter le fichier PDF d'entrée
+            gs_command.append(input_path)
+            
+            result = subprocess.run(gs_command, capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0 and os.path.exists(output_path):
                 output_size = os.path.getsize(output_path)
