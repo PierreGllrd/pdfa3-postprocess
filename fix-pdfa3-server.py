@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import glob
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = int(os.environ.get('PORT', 8080))
@@ -47,39 +48,84 @@ class PDFA3Handler(BaseHTTPRequestHandler):
             # Ces options forcent Ghostscript à générer l'OutputIntent RGB et l'ID keyword
             print(f"Processing PDF: {len(pdf_data)} bytes", flush=True)
             
-            # Chemin vers le fichier de configuration PDFA (si disponible)
-            pdfa_def_path = '/app/PDFA_def.ps'
-            if not os.path.exists(pdfa_def_path):
-                pdfa_def_path = None
-            
-            # Construire la commande Ghostscript
-            # Version qui fonctionnait pour l'ID keyword + ajout pour OutputIntent
-            gs_command = [
-                'gs',
-                '-dPDFA=3',                      # PDF/A-3
-                '-dBATCH',                       # Pas d'interaction
-                '-dNOPAUSE',                     # Pas de pause
-                '-dNOOUTERSAVE',                 # Pas de sauvegarde externe
-                '-sColorConversionStrategy=RGB', # Conversion en RGB (version qui fonctionnait)
-                '-sOutputFile=' + output_path,
-                '-sDEVICE=pdfwrite',             # Device de sortie PDF
-                '-dPDFACompatibilityPolicy=1',   # Politique de compatibilité PDF/A stricte
-                '-dUseCIEColor=true',            # Utiliser les couleurs CIE (important pour OutputIntent)
-                '-dCompatibilityLevel=1.4',      # Compatibilité PDF 1.4 (minimum pour PDF/A-3)
-                '-sProcessColorModel=DeviceRGB', # Modèle de couleur RGB
-                '-dPDFSETTINGS=/prepress',       # Paramètres prépresse (FORCE l'ID keyword dans le trailer)
-                '-dEmbedAllFonts=true',          # Embarquer toutes les polices
-                '-dSubsetFonts=true',            # Sous-ensembler les polices (optimisation)
-                '-dAutoRotatePages=/None',       # Pas de rotation automatique
+            # Chercher un profil ICC sRGB système (avec ghostscript-x installé)
+            possible_icc_paths = [
+                '/usr/share/color/icc/sRGB.icc',
+                '/usr/share/color/icc/ghostscript/srgb.icc',
+                '/usr/local/share/ghostscript/*/iccprofiles/srgb.icc',
+                '/usr/share/ghostscript/*/iccprofiles/srgb.icc',
             ]
             
-            # Ajouter le fichier de configuration PDFA AVANT le fichier d'entrée (ordre important)
-            if pdfa_def_path and os.path.exists(pdfa_def_path):
-                gs_command.append(pdfa_def_path)
+            icc_profile = None
+            for pattern in possible_icc_paths:
+                if '*' in pattern:
+                    # Utiliser glob pour chercher
+                    import glob
+                    matches = glob.glob(pattern)
+                    if matches:
+                        icc_profile = matches[0]
+                        break
+                elif os.path.exists(pattern):
+                    icc_profile = pattern
+                    break
+            
+            # Si pas de profil ICC trouvé, essayer de trouver via gs
+            if not icc_profile:
+                try:
+                    result_gs = subprocess.run(['gs', '--help'], capture_output=True, text=True, timeout=5)
+                    # Chercher dans le chemin standard de Ghostscript
+                    import glob
+                    gs_icc_paths = glob.glob('/usr/share/ghostscript/*/iccprofiles/*.icc')
+                    if gs_icc_paths:
+                        # Prendre le premier profil RGB trouvé
+                        for path in gs_icc_paths:
+                            if 'srgb' in path.lower() or 'rgb' in path.lower():
+                                icc_profile = path
+                                break
+                except:
+                    pass
+            
+            if icc_profile:
+                print(f"Found ICC profile: {icc_profile}", flush=True)
+            else:
+                print("Warning: No ICC profile found, using PDFA_def.ps", flush=True)
+            
+            # Construire la commande Ghostscript
+            # Utiliser UseDeviceIndependentColor pour forcer OutputIntent, mais avec -dPDFSETTINGS pour l'ID
+            gs_command = [
+                'gs',
+                '-dPDFA=3',                                    # PDF/A-3
+                '-dBATCH',                                     # Pas d'interaction
+                '-dNOPAUSE',                                   # Pas de pause
+                '-dNOOUTERSAVE',                               # Pas de sauvegarde externe
+                '-sColorConversionStrategy=UseDeviceIndependentColor', # Force OutputIntent (convertit DeviceRGB)
+                '-sOutputFile=' + output_path,
+                '-sDEVICE=pdfwrite',                           # Device de sortie PDF
+                '-dPDFACompatibilityPolicy=1',                 # Politique de compatibilité PDF/A stricte
+                '-dUseCIEColor=true',                          # Utiliser les couleurs CIE (OBLIGATOIRE pour OutputIntent)
+                '-dCompatibilityLevel=1.4',                    # Compatibilité PDF 1.4 (minimum pour PDF/A-3)
+                '-dPDFSETTINGS=/prepress',                     # Paramètres prépresse (FORCE l'ID keyword)
+                '-dEmbedAllFonts=true',                        # Embarquer toutes les polices
+                '-dSubsetFonts=true',                          # Sous-ensembler les polices
+                '-dAutoRotatePages=/None',                     # Pas de rotation automatique
+            ]
+            
+            # Ajouter le profil ICC si trouvé
+            if icc_profile:
+                gs_command.extend([
+                    '-sOutputICCProfile=' + icc_profile,       # Profil ICC pour OutputIntent
+                    '--permit-file-read=' + icc_profile,       # Autoriser la lecture du profil
+                ])
+            else:
+                # Fallback: utiliser PDFA_def.ps si pas de profil ICC
+                pdfa_def_path = '/app/PDFA_def.ps'
+                if os.path.exists(pdfa_def_path):
+                    gs_command.append(pdfa_def_path)
             
             # Ajouter le fichier PDF d'entrée en dernier
             gs_command.append(input_path)
             
+            print(f"Ghostscript command: {' '.join(gs_command)}", flush=True)
             result = subprocess.run(gs_command, capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0 and os.path.exists(output_path):
