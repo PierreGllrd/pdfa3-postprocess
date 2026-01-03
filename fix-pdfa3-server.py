@@ -43,21 +43,43 @@ class PDFA3Handler(BaseHTTPRequestHandler):
             output_path = output_file.name
         
         try:
-            # Post-traiter avec Ghostscript
+            # Post-traiter avec Ghostscript - COMMANDE AMÉLIORÉE pour PDF/A-3 strict
+            # Ces options forcent Ghostscript à générer l'OutputIntent RGB et l'ID keyword
+            print(f"Processing PDF: {len(pdf_data)} bytes", flush=True)
+            
             result = subprocess.run([
-                'gs', '-dPDFA=3', '-dBATCH', '-dNOPAUSE', '-dNOOUTERSAVE',
-                '-sColorConversionStrategy=RGB',
+                'gs',
+                '-dPDFA=3',                      # PDF/A-3
+                '-dBATCH',                       # Pas d'interaction
+                '-dNOPAUSE',                     # Pas de pause
+                '-dNOOUTERSAVE',                 # Pas de sauvegarde externe
+                '-sColorConversionStrategy=RGB', # Conversion en RGB
                 '-sOutputFile=' + output_path,
-                '-sDEVICE=pdfwrite',
-                '-dPDFACompatibilityPolicy=1',
-                '-dUseCIEColor=true',
+                '-sDEVICE=pdfwrite',             # Device de sortie PDF
+                '-dPDFACompatibilityPolicy=1',   # Politique de compatibilité PDF/A stricte
+                '-dUseCIEColor=true',            # Utiliser les couleurs CIE (OBLIGATOIRE pour OutputIntent)
+                '-dCompatibilityLevel=1.4',      # Compatibilité PDF 1.4 (minimum pour PDF/A-3)
+                '-sProcessColorModel=DeviceRGB', # Modèle de couleur RGB
+                '-dPDFSETTINGS=/prepress',       # Paramètres prépresse (FORCE l'ID keyword dans le trailer)
+                '-dEmbedAllFonts=true',          # Embarquer toutes les polices
+                '-dSubsetFonts=true',            # Sous-ensembler les polices (optimisation)
+                '-dAutoRotatePages=/None',       # Pas de rotation automatique
                 input_path
-            ], capture_output=True, text=True, timeout=60)
+            ], capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0 and os.path.exists(output_path):
+                output_size = os.path.getsize(output_path)
+                print(f"Ghostscript success: output size {output_size} bytes", flush=True)
+                
                 # Lire le PDF corrigé
                 with open(output_path, 'rb') as f:
                     corrected_pdf = f.read()
+                
+                # Vérifier que le PDF a une taille raisonnable
+                if len(corrected_pdf) < 100:
+                    print(f"Warning: PDF output too small ({len(corrected_pdf)} bytes)", flush=True)
+                    self.send_error(500, "Ghostscript output too small")
+                    return
                 
                 # Envoyer le PDF corrigé
                 self.send_response(200)
@@ -67,6 +89,7 @@ class PDFA3Handler(BaseHTTPRequestHandler):
                 self.wfile.write(corrected_pdf)
             else:
                 error_msg = result.stderr if result.stderr else "Unknown error"
+                print(f"Ghostscript error (code {result.returncode}): {error_msg}", flush=True)
                 self.send_error(500, f"Ghostscript failed: {error_msg}")
         except subprocess.TimeoutExpired:
             self.send_error(504, "Ghostscript timeout")
