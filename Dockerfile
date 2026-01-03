@@ -1,9 +1,9 @@
 # Service de post-traitement PDF/A-3 avec Ghostscript
 FROM python:3.11-slim
 
-# Installer Ghostscript
+# Installer Ghostscript et ghostscript-x (apporte les profils ICC)
 RUN apt-get update && \
-    apt-get install -y ghostscript && \
+    apt-get install -y ghostscript ghostscript-x && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
