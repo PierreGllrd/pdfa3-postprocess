@@ -9,9 +9,63 @@ import sys
 import subprocess
 import tempfile
 import glob
+import io
 from http.server import HTTPServer, BaseHTTPRequestHandler
+try:
+    from pypdf import PdfReader, PdfWriter
+except ImportError:
+    # Fallback pour anciennes versions
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+    except ImportError:
+        PdfReader = None
+        PdfWriter = None
 
 PORT = int(os.environ.get('PORT', 8080))
+
+def remove_empty_pages(pdf_data):
+    """
+    Détecte et supprime les pages vides d'un PDF.
+    Retourne le PDF modifié ou None si pypdf n'est pas disponible.
+    """
+    if PdfReader is None:
+        print("Warning: pypdf not available, skipping empty page removal", flush=True)
+        return pdf_data
+    
+    try:
+        pdf_reader = PdfReader(io.BytesIO(pdf_data))
+        pdf_writer = PdfWriter()
+        pages_removed = 0
+        
+        for page_num, page in enumerate(pdf_reader.pages):
+            # Extraire le texte de la page
+            text = page.extract_text().strip()
+            
+            # Vérifier si la page contient du contenu
+            # Une page est considérée vide si :
+            # 1. Pas de texte (ou seulement des espaces)
+            # 2. Pas d'images (on pourrait aussi vérifier les images mais c'est plus complexe)
+            if len(text) == 0:
+                print(f"Page {page_num + 1} is empty, removing it", flush=True)
+                pages_removed += 1
+                continue
+            
+            # Garder la page
+            pdf_writer.add_page(page)
+        
+        if pages_removed > 0:
+            print(f"Removed {pages_removed} empty page(s)", flush=True)
+            # Écrire le PDF modifié dans un buffer
+            output_buffer = io.BytesIO()
+            pdf_writer.write(output_buffer)
+            return output_buffer.getvalue()
+        else:
+            print("No empty pages found", flush=True)
+            return pdf_data
+    
+    except Exception as e:
+        print(f"Error removing empty pages: {e}, keeping original PDF", flush=True)
+        return pdf_data
 
 class PDFA3Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -92,6 +146,7 @@ class PDFA3Handler(BaseHTTPRequestHandler):
             
             # Construire la commande Ghostscript
             # Utiliser UseDeviceIndependentColor pour forcer OutputIntent, mais avec -dPDFSETTINGS pour l'ID
+            # AMÉLIORATIONS pour le rendu des traits (résolution et antialiasing)
             gs_command = [
                 'gs',
                 '-dPDFA=3',                                    # PDF/A-3
@@ -108,6 +163,12 @@ class PDFA3Handler(BaseHTTPRequestHandler):
                 '-dEmbedAllFonts=true',                        # Embarquer toutes les polices
                 '-dSubsetFonts=true',                          # Sous-ensembler les polices
                 '-dAutoRotatePages=/None',                     # Pas de rotation automatique
+                # Améliorations pour le rendu des traits (problème Mac)
+                '-dResolution=300',                            # Résolution élevée pour meilleur rendu
+                '-dTextAlphaBits=4',                           # Antialiasing texte 4 bits (meilleure qualité)
+                '-dGraphicsAlphaBits=4',                       # Antialiasing graphiques 4 bits
+                '-dRenderTextAsOutlines=false',                # Garder le texte comme texte (pas en contours)
+                '-dPreserveHalftoneInfo=true',                 # Préserver les informations de tramage
             ]
             
             # Ajouter le profil ICC si trouvé
@@ -141,6 +202,9 @@ class PDFA3Handler(BaseHTTPRequestHandler):
                     print(f"Warning: PDF output too small ({len(corrected_pdf)} bytes)", flush=True)
                     self.send_error(500, "Ghostscript output too small")
                     return
+                
+                # Supprimer les pages vides
+                corrected_pdf = remove_empty_pages(corrected_pdf)
                 
                 # Envoyer le PDF corrigé
                 self.send_response(200)

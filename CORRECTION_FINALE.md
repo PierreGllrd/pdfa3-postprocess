@@ -54,3 +54,4 @@ Si aucun profil ICC n'est trouvé, on devra peut-être :
 - Télécharger un profil sRGB.icc et l'inclure dans le Docker
 - Ou utiliser une autre méthode pour créer l'OutputIntent
 
+

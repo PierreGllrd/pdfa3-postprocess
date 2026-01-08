@@ -47,3 +47,4 @@ Cette option force Ghostscript à convertir toutes les couleurs DeviceRGB en cou
 
 Vérifiez les logs Render.com pour voir si Ghostscript génère des erreurs ou des warnings. La commande devrait maintenant être correcte.
 
+

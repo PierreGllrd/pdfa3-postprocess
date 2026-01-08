@@ -7,6 +7,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Installer pypdf pour la manipulation de PDF (détection pages vides)
+RUN pip install --no-cache-dir pypdf
+
 # Vérifier que Ghostscript est installé
 RUN gs --version
 

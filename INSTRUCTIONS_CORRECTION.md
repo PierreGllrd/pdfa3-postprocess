@@ -53,3 +53,4 @@ Après redéploiement, les 2 erreurs PDF/A-3 devraient être corrigées :
 - ✅ OutputIntent RGB présent (corrige DeviceRGB)
 - ✅ ID keyword présent (corrige l'erreur ID keyword)
 
+
