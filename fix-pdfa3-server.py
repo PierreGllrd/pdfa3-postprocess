@@ -11,125 +11,7 @@ import tempfile
 import glob
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-try:
-    import PyPDF2
-    HAS_PYPDF2 = True
-except ImportError:
-    HAS_PYPDF2 = False
-    print("Warning: PyPDF2 not available, empty page detection disabled", flush=True)
-
 PORT = int(os.environ.get('PORT', 8080))
-
-def detect_empty_pages(pdf_path):
-    """
-    Détecte les pages vides dans un PDF.
-    Une page est considérée comme vide si elle ne contient pas de texte significatif
-    et a très peu de contenu (typiquement causé par des marges qui créent une page supplémentaire).
-    Retourne une liste des numéros de pages vides (0-indexed).
-    """
-    if not HAS_PYPDF2:
-        return []
-    
-    empty_pages = []
-    try:
-        with open(pdf_path, 'rb') as f:
-            pdf_reader = PyPDF2.PdfReader(f)
-            total_pages = len(pdf_reader.pages)
-            
-            for page_num in range(total_pages):
-                page = pdf_reader.pages[page_num]
-                is_empty = False
-                
-                # Méthode 1: Vérifier le texte extrait
-                text = page.extract_text()
-                text_content = text.strip() if text else ""
-                
-                # Méthode 2: Vérifier le contenu de la page via le dictionnaire
-                try:
-                    page_dict = page.get_object()
-                    content_size = 0
-                    
-                    # Vérifier la présence et la taille du contenu
-                    if '/Contents' in page_dict:
-                        contents = page_dict['/Contents']
-                        # Si Contents est une liste d'objets, calculer la taille totale
-                        if hasattr(contents, '__len__'):
-                            if isinstance(contents, list):
-                                # Si c'est une liste d'objets indirects, estimer la taille
-                                content_size = len(contents)
-                            else:
-                                # Si c'est un objet unique, vérifier s'il est petit
-                                content_size = 1
-                    else:
-                        # Pas de contenu du tout
-                        content_size = 0
-                    
-                    # Une page est considérée vide si:
-                    # 1. Pas de texte significatif (moins de 10 caractères)
-                    # 2. ET très peu de contenu (moins de 2 objets de contenu)
-                    if len(text_content) < 10 and content_size < 2:
-                        is_empty = True
-                        
-                except Exception as e:
-                    # Si on ne peut pas analyser le contenu, se baser uniquement sur le texte
-                    if len(text_content) < 10:
-                        is_empty = True
-                
-                if is_empty:
-                    empty_pages.append(page_num)
-        
-        if empty_pages:
-            print(f"Detected {len(empty_pages)} empty page(s): {[p+1 for p in empty_pages]}", flush=True)
-        return empty_pages
-    except Exception as e:
-        print(f"Error detecting empty pages: {e}", flush=True)
-        return []
-
-def remove_empty_pages_with_gs(input_path, output_path, empty_pages):
-    """
-    Supprime les pages vides d'un PDF en utilisant PyPDF2.
-    empty_pages: liste des numéros de pages à supprimer (0-indexed)
-    """
-    if not empty_pages:
-        # Pas de pages à supprimer, copier le fichier tel quel
-        import shutil
-        shutil.copy2(input_path, output_path)
-        return True
-    
-    if not HAS_PYPDF2:
-        # Si PyPDF2 n'est pas disponible, on ne peut pas supprimer les pages
-        print("Warning: PyPDF2 not available, cannot remove empty pages", flush=True)
-        import shutil
-        shutil.copy2(input_path, output_path)
-        return False
-    
-    try:
-        # Utiliser PyPDF2 pour créer un nouveau PDF sans les pages vides
-        pdf_writer = PyPDF2.PdfWriter()
-        with open(input_path, 'rb') as f:
-            pdf_reader = PyPDF2.PdfReader(f)
-            total_pages = len(pdf_reader.pages)
-            
-            for i in range(total_pages):
-                if i not in empty_pages:
-                    pdf_writer.add_page(pdf_reader.pages[i])
-        
-        if len(pdf_writer.pages) == 0:
-            print("Error: All pages would be removed!", flush=True)
-            return False
-        
-        # Écrire le PDF sans les pages vides
-        with open(output_path, 'wb') as f:
-            pdf_writer.write(f)
-        
-        print(f"Removed {len(empty_pages)} empty page(s), kept {len(pdf_writer.pages)} page(s)", flush=True)
-        return True
-    except Exception as e:
-        print(f"Error removing empty pages: {e}", flush=True)
-        # En cas d'erreur, copier le fichier original
-        import shutil
-        shutil.copy2(input_path, output_path)
-        return False
 
 class PDFA3Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -161,32 +43,10 @@ class PDFA3Handler(BaseHTTPRequestHandler):
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as output_file:
             output_path = output_file.name
         
-        temp_cleaned_path = None  # Pour stocker le chemin du PDF nettoyé des pages vides
-        
         try:
             # Post-traiter avec Ghostscript - COMMANDE AMÉLIORÉE pour PDF/A-3 strict
             # Ces options forcent Ghostscript à générer l'OutputIntent RGB et l'ID keyword
             print(f"Processing PDF: {len(pdf_data)} bytes", flush=True)
-            
-            # Étape 1: Détecter et supprimer les pages vides (causées par les marges Gotenberg)
-            empty_pages = detect_empty_pages(input_path)
-            if empty_pages:
-                print(f"Removing {len(empty_pages)} empty page(s) before PDF/A-3 processing", flush=True)
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                    temp_cleaned_path = temp_file.name
-                
-                if remove_empty_pages_with_gs(input_path, temp_cleaned_path, empty_pages):
-                    # Remplacer le fichier d'entrée par celui sans pages vides
-                    os.unlink(input_path)
-                    input_path = temp_cleaned_path
-                    temp_cleaned_path = None  # Ne pas supprimer maintenant, on le fera dans finally
-                else:
-                    print("Warning: Failed to remove empty pages, continuing with original PDF", flush=True)
-                    try:
-                        os.unlink(temp_cleaned_path)
-                        temp_cleaned_path = None
-                    except:
-                        pass
             
             # Chercher un profil ICC sRGB système (avec ghostscript-x installé)
             possible_icc_paths = [
@@ -302,8 +162,6 @@ class PDFA3Handler(BaseHTTPRequestHandler):
                 os.unlink(input_path)
                 if os.path.exists(output_path):
                     os.unlink(output_path)
-                if temp_cleaned_path and os.path.exists(temp_cleaned_path):
-                    os.unlink(temp_cleaned_path)
             except:
                 pass
     
